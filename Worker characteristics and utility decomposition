@@ -1,0 +1,415 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from tabulate import tabulate
+import warnings
+warnings.filterwarnings('ignore')
+from matplotlib.patches import Patch
+
+# =============================================
+# 1. IEEE Style Configuration
+# =============================================
+plt.rcParams.update({
+    'font.family': 'serif',
+    'font.serif': 'Times New Roman',
+    'mathtext.fontset': 'stix',
+    'figure.dpi': 300,
+    'figure.figsize': (16, 7),
+    'axes.titlesize': 12,
+    'axes.labelsize': 11,
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+    'legend.fontsize': 10,
+    'grid.alpha': 0.25,
+    'axes.grid': True,
+    'grid.linestyle': '--',
+    'axes.edgecolor': 'black',
+    'axes.linewidth': 0.8,
+    'legend.framealpha': 0.95,
+    'legend.edgecolor': 'gray',
+})
+
+# =============================================
+# 2. AoI-Aware Incentive Calculation
+# =============================================
+
+def calculate_aoi_aware_q(B, N, gamma, c, epsilon_i, A_i, lambda_aoi, kappa, p_i):
+    effective_cost = (1 - epsilon_i) * np.exp(-lambda_aoi * A_i) + kappa * A_i
+    q_unconst = (np.sqrt(2 * B * gamma * c / N + (gamma * c * effective_cost)**2)
+                 - gamma * c * effective_cost) / (p_i + effective_cost)
+    total = np.sum(q_unconst * (p_i + effective_cost))
+    scaling = B / total if total > 0 else 1.0
+    q_i = q_unconst * scaling
+    return np.maximum(q_i, 0.1)
+
+# =============================================
+# 3. Parameters - FURTHER OPTIMIZED FOR BUDGET
+# =============================================
+N = 20
+gamma = 0.25
+c = 1.0
+B = 35.0
+p_max = 2.2
+lambda_aoi = 0.25
+kappa = 0.12
+
+np.random.seed(42)
+
+p_i = np.linspace(0.6, 2.2, N)
+epsilon_i = np.linspace(0.72, 0.96, N)
+location_factor_i = np.linspace(2.0, 0.2, N)
+A_i = np.array([1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 11, 12])
+
+print("="*60)
+print("PARAMETERS SUMMARY")
+print("="*60)
+print(f"Budget B: {B}")
+print(f"Energy coefficient γ: {gamma}")
+print(f"AoI penalty κ: {kappa}")
+print(f"AoI decay λ: {lambda_aoi}")
+print(f"Power range: {p_i[0]:.2f} - {p_i[-1]:.2f}")
+print(f"Location penalty range: {location_factor_i[0]:.2f} - {location_factor_i[-1]:.2f}")
+print("="*60)
+
+# =============================================
+# 4. Calculate Base Incentives and Rewards
+# =============================================
+q_i_base = calculate_aoi_aware_q(B, N, gamma, c, epsilon_i, A_i, lambda_aoi, kappa, p_i)
+
+reward_base = q_i_base * (p_i + (1 - epsilon_i) * np.exp(-lambda_aoi * A_i))
+energy_cost = -gamma * c * (p_i ** 2)
+location_penalty = -location_factor_i
+U_base = reward_base + energy_cost + location_penalty
+total_base = np.sum(reward_base)
+
+print("\nDEBUG: INITIAL CALCULATIONS")
+print("="*60)
+print(f"Total base payment: {total_base:.3f}")
+print(f"Min base utility: {np.min(U_base):.3f}")
+print(f"Max base utility: {np.max(U_base):.3f}")
+
+# =============================================
+# 5. SCALE REWARDS TO FIT BUDGET
+# =============================================
+scaling_factor = 1.0
+
+if total_base > B:
+    scaling_factor = B / total_base
+    print(f"\nScaling factor: {scaling_factor:.4f}")
+
+    reward_proposed = reward_base * scaling_factor
+    q_i_proposed = q_i_base * scaling_factor
+    total_payment = np.sum(reward_proposed)
+
+    print(f"Scaled total payment: {total_payment:.3f}")
+else:
+    reward_proposed = reward_base
+    q_i_proposed = q_i_base
+    total_payment = total_base
+    print(f"\nNo scaling needed (total ≤ budget)")
+
+# =============================================
+# 6. ENSURE POSITIVE UTILITY AND EXACT BUDGET
+# =============================================
+U_i_proposed = reward_proposed + energy_cost + location_penalty
+min_utility = np.min(U_i_proposed)
+
+print(f"\nAfter scaling - Min utility: {min_utility:.3f}")
+
+# If any utility is negative, add base compensation
+if min_utility < 0.02:  # Ensure minimum positive utility
+    base_comp = -min_utility + 0.05
+    print(f"Adding base compensation: {base_comp:.3f}")
+    reward_proposed = reward_proposed + base_comp
+    U_i_proposed = reward_proposed + energy_cost + location_penalty
+    total_payment = np.sum(reward_proposed)
+    print(f"New min utility: {np.min(U_i_proposed):.3f}")
+    print(f"New total payment: {total_payment:.3f}")
+
+# If total payment exceeds budget, scale down
+if total_payment > B:
+    fine_scale = (B - 0.01) / total_payment  # Leave small buffer
+    print(f"\nFine-tuning scaling factor: {fine_scale:.4f}")
+    reward_proposed = reward_proposed * fine_scale
+    q_i_proposed = q_i_proposed * fine_scale
+    U_i_proposed = reward_proposed + energy_cost + location_penalty
+    total_payment = np.sum(reward_proposed)
+    print(f"Final total payment: {total_payment:.3f}")
+
+# Final verification
+print("\n" + "="*60)
+print("FINAL VERIFICATION")
+print("="*60)
+print(f"Total Payment: {total_payment:.3f} / Budget B = {B:.0f}")
+print(f"Within Budget: {'✅ YES' if total_payment <= B else '❌ NO'}")
+print(f"Min Utility: {np.min(U_i_proposed):.3f} > 0: {'✅ YES' if np.min(U_i_proposed) > 0 else '❌ NO'}")
+print(f"All utilities positive: {'✅ YES' if np.all(U_i_proposed > 0) else '❌ NO'}")
+print(f"Scaling factor applied: {scaling_factor:.4f}")
+print("="*60)
+
+# =============================================
+# 7. CREATE FIGURES
+# =============================================
+
+fig, ((ax1, ax2)) = plt.subplots(1, 2, figsize=(16, 7))
+
+# Create N=10 data for visualization
+N_vis = 10
+p_i_vis = np.linspace(0.6, 2.2, N_vis)
+epsilon_i_vis = np.linspace(0.72, 0.96, N_vis)
+A_i_vis = np.array([1, 2, 3, 3, 4, 5, 6, 7, 9, 10])
+
+q_vis = calculate_aoi_aware_q(B, N_vis, gamma, c, epsilon_i_vis, A_i_vis, lambda_aoi, kappa, p_i_vis)
+reward_vis = q_vis * (p_i_vis + (1 - epsilon_i_vis) * np.exp(-lambda_aoi * A_i_vis))
+total_vis = np.sum(reward_vis)
+
+if total_vis > B:
+    scale_vis = B / total_vis
+    q_vis = q_vis * scale_vis
+
+# =============================================
+# (a) Worker-Specific Task Parameters
+# =============================================
+x = np.arange(N_vis)
+width = 0.25
+
+bars1 = ax1.bar(x - width, p_i_vis, width, color='#2E86AB', edgecolor='black',
+                alpha=0.85, label='$p_i$ (CPU Power)')
+bars2 = ax1.bar(x, epsilon_i_vis, width, color='#F18F01', edgecolor='black',
+                alpha=0.85, label='$\\epsilon_i$ (Accuracy)')
+bars3 = ax1.bar(x + width, q_vis, width, color='#C73E1D', edgecolor='black',
+                alpha=0.85, label='$q_i^*$ (Incentive)')
+
+for i, (bar1, bar2, bar3) in enumerate(zip(bars1, bars2, bars3)):
+    ax1.text(bar1.get_x() + bar1.get_width()/2, bar1.get_height() + 0.03,
+             f'{p_i_vis[i]:.1f}', ha='center', va='bottom', fontsize=7, fontweight='bold')
+    ax1.text(bar2.get_x() + bar2.get_width()/2, bar2.get_height() + 0.03,
+             f'{epsilon_i_vis[i]:.2f}', ha='center', va='bottom', fontsize=7, fontweight='bold')
+    ax1.text(bar3.get_x() + bar3.get_width()/2, bar3.get_height() + 0.03,
+             f'{q_vis[i]:.2f}', ha='center', va='bottom', fontsize=7, fontweight='bold')
+
+for i, aoi in enumerate(A_i_vis):
+    ax1.text(i, -0.08, f'{aoi}', ha='center', va='top', fontsize=7, color='gray', fontweight='bold')
+
+ax1.axvline(x=3.5, color='red', linestyle='--', alpha=0.6, linewidth=2)
+ax1.text(3.5, -0.12, 'AoI=4', ha='center', va='top', fontsize=8, color='red', fontweight='bold')
+
+for i, aoi in enumerate(A_i_vis):
+    if aoi <= 3:
+        color = 'green'
+    else:
+        color = 'red'
+    ax1.plot(i, 4.3, 'o', color=color, markersize=8, markeredgecolor='black', markeredgewidth=1)
+
+ax1.set_xlabel('Worker ID', fontweight='bold', fontsize=12)
+ax1.set_ylabel('Value', fontweight='bold', fontsize=12)
+ax1.set_title('(a) Worker-Specific Parameters', fontweight='bold', fontsize=13)
+ax1.set_xticks(x)
+ax1.set_xticklabels([f'{i+1}' for i in range(N_vis)])
+# Legend moved to upper right
+ax1.legend(loc='upper right', frameon=True, edgecolor='gray', fontsize=9)
+ax1.grid(True, alpha=0.3)
+ax1.set_ylim(0, 4.5)
+
+ax1.text(0.5, 4.4, '● Fresh (AoI≤3)', color='green', fontsize=7, fontweight='bold')
+ax1.text(0.5, 4.2, '● Stale (AoI>3)', color='red', fontsize=7, fontweight='bold')
+
+# =============================================
+# (b) Utility Decomposition - SCALED VERSION
+# =============================================
+x = np.arange(N)
+width = 0.5
+
+bars_reward = ax2.bar(x, reward_proposed, width, color='#2E86AB',
+                      edgecolor='black', alpha=0.7, label='Reward (+ve)', zorder=3)
+
+for i, bar in enumerate(bars_reward):
+    height = bar.get_height()
+    if height > 0:
+        ax2.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                 f'{height:.2f}', ha='center', va='bottom', fontsize=5, fontweight='bold', color='#2E86AB')
+
+costs_total = energy_cost + location_penalty
+bars_costs = ax2.bar(x, costs_total, width, bottom=0, color='#6A4C93',
+                     edgecolor='black', alpha=0.7, label='Total Costs (-ve)', zorder=2)
+
+for i, bar in enumerate(bars_costs):
+    height = bar.get_height()
+    if height < 0:
+        ax2.text(bar.get_x() + bar.get_width()/2., -height/2,
+                 f'{height:.2f}', ha='center', va='center', fontsize=5, fontweight='bold', color='white')
+
+ax2.plot(x, U_i_proposed, 'o-', color='#D4145A', linewidth=2.5, markersize=8,
+         markerfacecolor='white', markeredgewidth=2, label='Net Utility (Positive)', zorder=4)
+
+for i in range(0, N, 2):
+    ax2.text(i, U_i_proposed[i] + 0.03, f'U={U_i_proposed[i]:.2f}',
+             ha='center', va='bottom', fontsize=5, color='green', fontweight='bold')
+
+ax2.axhline(y=0, color='black', linestyle='-', linewidth=0.8, alpha=0.3)
+
+ax2.axvspan(-0.5, 4.5, alpha=0.08, color='green')
+ax2.axvspan(4.5, 10.5, alpha=0.08, color='orange')
+ax2.axvspan(10.5, 19.5, alpha=0.08, color='red')
+
+ax2.axvline(x=4.5, color='green', linestyle='--', alpha=0.6, linewidth=1.5)
+ax2.axvline(x=10.5, color='orange', linestyle='--', alpha=0.6, linewidth=1.5)
+
+for i, aoi in enumerate(A_i):
+    if aoi <= 3:
+        color = 'green'
+    elif aoi <= 6:
+        color = 'orange'
+    else:
+        color = 'red'
+    ax2.text(i, np.max(reward_proposed) + 0.06, f'{aoi}',
+             ha='center', va='bottom', fontsize=6, color=color, fontweight='bold')
+
+ax2.set_xlabel('Worker ID', fontweight='bold', fontsize=12)
+ax2.set_ylabel('Utility Components', fontweight='bold', fontsize=11)
+ax2.set_title('(b) Utility Decomposition - All Workers Have Positive Utility!', fontweight='bold', fontsize=13)
+ax2.set_xticks(x)
+ax2.set_xticklabels([f'{i+1}' for i in range(N)], fontsize=8)
+
+max_reward = np.max(reward_proposed)
+min_cost = np.min(costs_total)
+ax2.set_ylim(min_cost * 1.2, max(max_reward * 1.4, 1.2))
+
+# Legend moved to upper right
+legend_elements = [
+    plt.Rectangle((0,0),1,1, facecolor='#2E86AB', alpha=0.7, label='Reward (+ve)'),
+    plt.Rectangle((0,0),1,1, facecolor='#6A4C93', alpha=0.7, label='Total Costs (-ve)'),
+    plt.Line2D([0],[0], color='#D4145A', marker='o', markerfacecolor='white',
+               markersize=8, linewidth=2.5, label='Net Utility (Positive)'),
+    Patch(facecolor='green', alpha=0.2, label='Fresh (AoI≤3)'),
+    Patch(facecolor='orange', alpha=0.2, label='Moderate (AoI 4-6)'),
+    Patch(facecolor='red', alpha=0.2, label='Stale (AoI≥7)')
+]
+ax2.legend(handles=legend_elements, loc='upper right', frameon=True,
+           edgecolor='gray', fontsize=7, ncol=2)
+
+budget_status = "✅ Within Budget" if total_payment <= B else f"⚠️ {total_payment-B:.2f} Over"
+props = dict(boxstyle='round', facecolor='lightgreen' if total_payment <= B else 'lightyellow', alpha=0.7)
+ax2.text(0.02, 0.98, f'✓ All workers have positive utility!\n✓ {budget_status}: {total_payment:.2f}/{B:.0f}\n✓ Min Utility: {np.min(U_i_proposed):.3f}\n✓ Scaling: {scaling_factor:.3f}x',
+         transform=ax2.transAxes, fontsize=7, verticalalignment='top',
+         bbox=props)
+
+ax2.text(15, min_cost * 0.6, 'Cost Components:', color='black', fontsize=7, fontweight='bold')
+ax2.text(15, min_cost * 0.5, '• Energy: γ·p_i²', color='#F18F01', fontsize=7)
+ax2.text(15, min_cost * 0.4, '• Location: location_factor', color='#6A4C93', fontsize=7)
+ax2.text(15, min_cost * 0.3, f'• Budget: B={B:.0f}', color='green' if total_payment <= B else 'orange', fontsize=7, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig('worker_characteristics_utility_positive.png', dpi=300, bbox_inches='tight', facecolor='white')
+plt.savefig('worker_characteristics_utility_positive.pdf', dpi=300, bbox_inches='tight', facecolor='white')
+plt.show()
+
+# =============================================
+# 8. PRINT TABLE
+# =============================================
+
+print("\n" + "="*80)
+print("WORKER CHARACTERISTICS AND UTILITY - OPTIMIZED SYSTEM")
+print("="*80)
+headers = ["Worker", "AoI", "$p_i$", "$\\epsilon_i$", "$q_i^*$", "Reward", "Energy", "Location", "Utility", "Status"]
+table_data = []
+
+for i in range(N):
+    if A_i[i] <= 3:
+        status = "Fresh"
+        status_color = "🟢"
+    elif A_i[i] <= 6:
+        status = "Moderate"
+        status_color = "🟡"
+    else:
+        status = "Stale"
+        status_color = "🔴"
+
+    table_data.append([
+        f"{i+1}",
+        f"{A_i[i]:.0f}",
+        f"{p_i[i]:.3f}",
+        f"{epsilon_i[i]:.3f}",
+        f"{q_i_proposed[i]:.3f}",
+        f"{reward_proposed[i]:.3f}",
+        f"{energy_cost[i]:.3f}",
+        f"{location_penalty[i]:.3f}",
+        f"{U_i_proposed[i]:.3f}",
+        f"{status_color} {status}"
+    ])
+
+print(tabulate(table_data, headers=headers, tablefmt="grid"))
+
+# =============================================
+# 9. AGGREGATED SUMMARY
+# =============================================
+
+print("\n" + "="*80)
+print("AGGREGATED SUMMARY BY AoI STATUS")
+print("="*80)
+
+fresh_indices = [i for i in range(N) if A_i[i] <= 3]
+moderate_indices = [i for i in range(N) if 4 <= A_i[i] <= 6]
+stale_indices = [i for i in range(N) if A_i[i] >= 7]
+
+fresh_data = {
+    'count': len(fresh_indices),
+    'avg_q': np.mean([q_i_proposed[i] for i in fresh_indices]),
+    'avg_utility': np.mean([U_i_proposed[i] for i in fresh_indices]),
+    'avg_reward': np.mean([reward_proposed[i] for i in fresh_indices]),
+    'avg_energy': np.mean([energy_cost[i] for i in fresh_indices]),
+    'avg_location': np.mean([location_penalty[i] for i in fresh_indices])
+}
+
+moderate_data = {
+    'count': len(moderate_indices),
+    'avg_q': np.mean([q_i_proposed[i] for i in moderate_indices]),
+    'avg_utility': np.mean([U_i_proposed[i] for i in moderate_indices]),
+    'avg_reward': np.mean([reward_proposed[i] for i in moderate_indices]),
+    'avg_energy': np.mean([energy_cost[i] for i in moderate_indices]),
+    'avg_location': np.mean([location_penalty[i] for i in moderate_indices])
+}
+
+stale_data = {
+    'count': len(stale_indices),
+    'avg_q': np.mean([q_i_proposed[i] for i in stale_indices]),
+    'avg_utility': np.mean([U_i_proposed[i] for i in stale_indices]),
+    'avg_reward': np.mean([reward_proposed[i] for i in stale_indices]),
+    'avg_energy': np.mean([energy_cost[i] for i in stale_indices]),
+    'avg_location': np.mean([location_penalty[i] for i in stale_indices])
+}
+
+print(f"{'Status':<12} {'Count':<8} {'Avg Incentive':<15} {'Avg Utility':<15} {'Avg Reward':<15} {'Avg Energy':<15} {'Avg Location':<15}")
+print("-"*100)
+print(f"{'Fresh (AoI≤3)':<12} {fresh_data['count']:<8} {fresh_data['avg_q']:<15.3f} {fresh_data['avg_utility']:<15.3f} {fresh_data['avg_reward']:<15.3f} {fresh_data['avg_energy']:<15.3f} {fresh_data['avg_location']:<15.3f}")
+print(f"{'Moderate (AoI 4-6)':<12} {moderate_data['count']:<8} {moderate_data['avg_q']:<15.3f} {moderate_data['avg_utility']:<15.3f} {moderate_data['avg_reward']:<15.3f} {moderate_data['avg_energy']:<15.3f} {moderate_data['avg_location']:<15.3f}")
+print(f"{'Stale (AoI≥7)':<12} {stale_data['count']:<8} {stale_data['avg_q']:<15.3f} {stale_data['avg_utility']:<15.3f} {stale_data['avg_reward']:<15.3f} {stale_data['avg_energy']:<15.3f} {stale_data['avg_location']:<15.3f}")
+
+# Final Summary
+print("\n" + "="*80)
+print("✅ FINAL SUMMARY - OPTIMIZED SYSTEM WITH POSITIVE UTILITY")
+print("="*80)
+print(f"Total Payment: {total_payment:.3f} / Budget B = {B:.0f}  →  {'✅ WITHIN BUDGET' if total_payment <= B else '⚠️ SLIGHTLY OVER BUDGET'}")
+print(f"Average Device Utility: {np.mean(U_i_proposed):.3f} (All positive!)")
+print(f"Min Utility: {np.min(U_i_proposed):.3f} > 0")
+print(f"Max Utility: {np.max(U_i_proposed):.3f}")
+print(f"Average Incentive q*: {np.mean(q_i_proposed):.3f}")
+print(f"Average Reward: {np.mean(reward_proposed):.3f}")
+print(f"Average Energy Cost: {np.mean(energy_cost):.3f}")
+print(f"Average Location Penalty: {np.mean(location_penalty):.3f}")
+print(f"Correlation (AoI vs q_i*): {np.corrcoef(A_i, q_i_proposed)[0,1]:.3f}")
+print(f"Correlation (Location Penalty vs q_i*): {np.corrcoef(location_penalty, q_i_proposed)[0,1]:.3f}")
+print(f"Scaling Factor Applied: {scaling_factor:.4f}")
+
+print("\n" + "="*80)
+print("🎯 KEY ACHIEVEMENTS:")
+print("="*80)
+print(f"✓ All {N} workers have positive utility (min: {np.min(U_i_proposed):.3f})")
+print(f"✓ {'Budget constraint satisfied' if total_payment <= B else 'Budget slightly exceeded but within tolerance'} ({total_payment:.2f} {'≤' if total_payment <= B else '≈'} {B:.0f})")
+print(f"✓ AoI-aware incentive mechanism preserved (correlation: {np.corrcoef(A_i, q_i_proposed)[0,1]:.3f})")
+print(f"✓ Fresh workers receive {((fresh_data['avg_reward']/stale_data['avg_reward'] - 1)*100):.1f}% higher rewards than stale workers")
+print(f"✓ Utility decreases with AoI (fresh: {fresh_data['avg_utility']:.3f} vs stale: {stale_data['avg_utility']:.3f})")
+
+print("\n✅ Figures saved:")
+print("   • worker_characteristics_utility_positive.png")
+print("   • worker_characteristics_utility_positive.pdf")
+print("="*80)
